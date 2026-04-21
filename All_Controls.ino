@@ -4,7 +4,7 @@
 AlfredoCRSF crsf;
 
 // LX16A servo setup
-// servo1 (ID 1) — arm servo   — SB button (CH6) sweeps 0–240°
+// servo1 (ID 1) — arm servo   — 3-pos switch (ARM_SWITCH_CRSF_CH) sweeps 0–240°
 // servo2 (ID 2) — sweep servo — right stick L/R (CH1) maps to 0–40°
 const uint8_t SERVO_ID  = 1;
 const uint8_t SERVO2_ID = 2;
@@ -12,11 +12,18 @@ LX16A servo1(SERVO_ID,  Serial5);   // Serial5: TX=pin20, RX=pin21
 LX16A servo2(SERVO2_ID, Serial5);
 
 // --- Arm servo (servo1) state ---
-// SB switch (CH6): up=move up, middle=stop, down=move down
+// 3-pos switch (inverted): radio UP → arm down, radio DOWN → arm up, middle → hold
+// CRSF channel (1-based, same as EdgeTX Outputs / ELRS). If SB does nothing, watch A5/A6/A7 in
+// Serial — set ARM_SWITCH_CRSF_CH to the number that changes when you flip SB (often 5 or 6).
+const uint8_t ARM_SWITCH_CRSF_CH = 6;
+// µs thresholds — ELRS low can sit ~1050–1280; widen low side so "down" is not stuck as MID
+const uint16_t ARM_SW_DOWN_MAX = 1300;
+const uint16_t ARM_SW_UP_MIN   = 1700;
+
 const int   ARM_MIN  = 0;
 const int   ARM_MAX  = 240;
-const int   ARM_STEP = 2;         // degrees per step
-const unsigned long ARM_MS = 20;  // ms between steps
+const int   ARM_STEP = 2;         // degrees per step (lower = smoother)
+const unsigned long ARM_MS = 40;  // ms between steps — raise this to slow the arm further
 
 int  armAngle = 0;                // start at 0 to match park position
 unsigned long lastArmStep = 0;
@@ -148,20 +155,11 @@ void loop() {
   int sc = readSC();
   driveActuator(2,3,sc);
 
-  // --- SB Switch (CH6) — arm servo (servo1) up/stop/down ---
-  uint16_t rawCH6 = crsf.getChannel(6);
+  // --- 3-pos arm switch — servo1 up/stop/down (see ARM_SWITCH_CRSF_CH) ---
+  int rawArmSw = crsf.getChannel(ARM_SWITCH_CRSF_CH);
 
-  if (rawCH6 < 1200) {
-    // Switch DOWN — move arm down
-    unsigned long now = millis();
-    if (now - lastArmStep >= ARM_MS) {
-      lastArmStep = now;
-      armAngle -= ARM_STEP;
-      armAngle = constrain(armAngle, ARM_MIN, ARM_MAX);
-      servo1.move(armAngle, (uint16_t)ARM_MS);
-    }
-  } else if (rawCH6 > 1700) {
-    // Switch UP — move arm up
+  if (rawArmSw < (int)ARM_SW_DOWN_MAX) {
+    // Switch low (DOWN on radio) — move arm up (inverted from default)
     unsigned long now = millis();
     if (now - lastArmStep >= ARM_MS) {
       lastArmStep = now;
@@ -169,8 +167,17 @@ void loop() {
       armAngle = constrain(armAngle, ARM_MIN, ARM_MAX);
       servo1.move(armAngle, (uint16_t)ARM_MS);
     }
+  } else if (rawArmSw > (int)ARM_SW_UP_MIN) {
+    // Switch high (UP on radio) — move arm down (inverted from default)
+    unsigned long now = millis();
+    if (now - lastArmStep >= ARM_MS) {
+      lastArmStep = now;
+      armAngle -= ARM_STEP;
+      armAngle = constrain(armAngle, ARM_MIN, ARM_MAX);
+      servo1.move(armAngle, (uint16_t)ARM_MS);
+    }
   }
-  // Switch MIDDLE (1200–1700) — hold position, send nothing
+  // Middle — hold position, send nothing
 
   // --- servo2: right stick L/R (CH1) → position 0–40° ---
   // Rate-limited to avoid flooding the shared Serial4 bus
@@ -210,11 +217,17 @@ void loop() {
     // Actuator state
     const char* actStr = (sc == 0) ? "EXTEND" : (sc == 2) ? "RETRACT" : "STOP";
 
-    // SB switch state
-    const char* sbStr  = (rawCH6 < 1200) ? "DOWN" : (rawCH6 > 1700) ? "UP" : "MID";
+    // Arm switch (same thresholds as loop); A5–A7 help find which CRSF output SB uses
+    const char* sbStr = (rawArmSw < (int)ARM_SW_DOWN_MAX) ? "DOWN"
+                        : (rawArmSw > (int)ARM_SW_UP_MIN)   ? "UP"
+                                                            : "MID";
+    int a5 = crsf.getChannel(5);
+    int a6 = crsf.getChannel(6);
+    int a7 = crsf.getChannel(7);
 
-    Serial.printf("[ACT]%-7s [SB]%-4s arm=%3d°  [SV2]%2d°  [DRIVE] T=%.2f S=%.2f L=%.2f R=%.2f\n",
-                  actStr, sbStr, armAngle,
+    Serial.printf("[ACT]%-7s [ARM_SW ch%u]%-4s raw=%4d arm=%3d°  A5=%4d A6=%4d A7=%4d  [SV2]%2d°  [DRIVE] T=%.2f S=%.2f L=%.2f R=%.2f\n",
+                  actStr, (unsigned)ARM_SWITCH_CRSF_CH, sbStr, rawArmSw, armAngle,
+                  a5, a6, a7,
                   servo2Angle,
                   throttle, steering, left, right);
   }
