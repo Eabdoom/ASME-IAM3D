@@ -43,6 +43,7 @@ const bool THROTTLE_INVERTED = false;
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
 const uint8_t ARM_LIFT_CRSF_CH       = 7;
 const uint8_t CLAW_CRSF_CH           = 6;
+const uint8_t BUCKET_CRSF_CH         = 8;  // SE button
 
 const uint16_t SW_LOW_MAX  = 1300;
 const uint16_t SW_HIGH_MIN = 1700;
@@ -73,9 +74,10 @@ const int ROTATION_MIN = 0;
 const int ROTATION_MAX = 180;
 int rotationAngle = 90;
 
-const int BUCKET_MIN = 0;
-const int BUCKET_MAX = 180;
-const int BUCKET_START_POS = 170;
+const int BUCKET_MIN       = 0;
+const int BUCKET_MAX       = 180;
+const int BUCKET_START_POS = 170;  // resting / hold position
+const int BUCKET_DROP_POS  = 10;   // dump position when SE pressed
 int bucketAngle = BUCKET_START_POS;
 
 const int STARTUP_STEP_DELAY_MS = 45;
@@ -333,9 +335,19 @@ void loop() {
   }
 
   // ------------------------------------------------------------
-  // BUCKET PWM SERVO
+  // BUCKET PWM SERVO (CH8 / SE button)
+  // SE high = dump (BUCKET_DROP_POS), all other positions = hold (BUCKET_START_POS)
   // ------------------------------------------------------------
-  bucketServo.write(bucketAngle);
+  int bucketSwState = read3PosChannel(BUCKET_CRSF_CH);
+  int targetBucketAngle = (bucketSwState == 1) ? BUCKET_DROP_POS : BUCKET_START_POS;
+
+  static unsigned long lastBucketUpdate = 0;
+  if (millis() - lastBucketUpdate > 20) {
+    lastBucketUpdate = millis();
+    if (bucketAngle < targetBucketAngle)      bucketAngle = min(bucketAngle + 2, targetBucketAngle);
+    else if (bucketAngle > targetBucketAngle) bucketAngle = max(bucketAngle - 2, targetBucketAngle);
+    bucketServo.write(bucketAngle);
+  }
 
   // ------------------------------------------------------------
   // DRIVE MOTORS
