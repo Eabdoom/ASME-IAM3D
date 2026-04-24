@@ -24,8 +24,8 @@ const int RF_PIN = 3;  // Right forward
 const int RB_PIN = 2;  // Right backward
 
 // Arm lift actuator pins
-const int ARM_UP_PIN   = 7;
-const int ARM_DOWN_PIN = 8;
+const int ARM_UP_PIN   = 22;
+const int ARM_DOWN_PIN = 23;
 
 // Claw actuator pins
 const int CLAW_OPEN_PIN  = 9;
@@ -41,7 +41,7 @@ const int CLAW_CLOSE_PIN = 10;
 const bool THROTTLE_INVERTED = false;
 
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
-const uint8_t ARM_LIFT_CRSF_CH       = 7;  // <-- Fixed: Moved to CH7
+const uint8_t ARM_LIFT_CRSF_CH       = 7;
 const uint8_t CLAW_CRSF_CH           = 6;
 
 const uint16_t SW_LOW_MAX  = 1300;
@@ -121,18 +121,18 @@ float channelNorm(int ch) {
   return norm;
 }
 
+// Updated to return cleanly mapped states: 1 (Positive), -1 (Negative), 0 (Neutral)
 int read3PosChannel(uint8_t ch) {
   uint16_t raw = crsf.getChannel(ch);
 
-  // Failsafe: if CRSF hasn't connected, return STOP logic (1)
-  if (raw == 0) return 1;
+  // Failsafe: if CRSF hasn't connected, return STOP logic (0)
+  if (raw == 0) return 0;
 
-  if (raw < SW_LOW_MAX) return 0;
-  if (raw < SW_HIGH_MIN) return 1;
-  return 2;
+  if (raw < SW_LOW_MAX) return -1; // Negative signal
+  if (raw > SW_HIGH_MIN) return 1; // Positive signal
+  return 0;                        // Neutral signal
 }
 
-// <-- Fixed: Replaced with state-tracking and hardware-decoupling version
 void driveMotor(int forwardPin, int backwardPin, float norm) {
   // Track last known states to prevent hammering the registers at 600MHz
   static float lastNormLF = -2.0f, lastNormRF = -2.0f;
@@ -168,16 +168,17 @@ void driveMotor(int forwardPin, int backwardPin, float norm) {
   }
 }
 
-void driveActuator(int pinA, int pinB, int state) {
-  if (state == 0) {
-    digitalWrite(pinA, HIGH);
-    digitalWrite(pinB, LOW);
-  } else if (state == 2) {
-    digitalWrite(pinA, LOW);
-    digitalWrite(pinB, HIGH);
-  } else {
-    digitalWrite(pinA, LOW);
-    digitalWrite(pinB, LOW);
+// Updated to map the 1, -1, 0 states directly to hardware pins
+void driveActuator(int posPin, int negPin, int state) {
+  if (state == 1) {             // Positive signal
+    digitalWrite(posPin, HIGH);
+    digitalWrite(negPin, LOW);
+  } else if (state == -1) {     // Negative signal
+    digitalWrite(posPin, LOW);
+    digitalWrite(negPin, HIGH);
+  } else {                      // Neutral (0)
+    digitalWrite(posPin, LOW);
+    digitalWrite(negPin, LOW);
   }
 }
 
@@ -248,14 +249,12 @@ void setup() {
   armBusServo.initialize(115200);
   armBusServo.enableTorque();
   armBusServo.setServoMode();
-  // Removed forced move to ARM_BUS_MIN here to prevent violent jumping on startup
 
   // PWM servos back on
   ensureRotationServoAttached();     // attach only, no startup move
   ensureBucketServoAttached();       // attach and move bucket slowly to rest
   slowMovePWMServo(bucketServo, 90, BUCKET_START_POS, STARTUP_STEP_DELAY_MS);
   bucketAngle = BUCKET_START_POS;
-
 }
 
 // ============================================================
@@ -317,7 +316,6 @@ void loop() {
       }
     }
   }
-  // middle = hold
 
   // ------------------------------------------------------------
   // ROTATION PWM SERVO (CH11)
@@ -327,7 +325,7 @@ void loop() {
   targetRotationAngle = constrain(targetRotationAngle, ROTATION_MIN, ROTATION_MAX);
 
   static unsigned long lastRotUpdate = 0;
-  if (millis() - lastRotUpdate > 15) { // Adjust 15ms higher for slower rotation
+  if (millis() - lastRotUpdate > 15) { 
     lastRotUpdate = millis();
     if (rotationAngle < targetRotationAngle) rotationAngle++;
     else if (rotationAngle > targetRotationAngle) rotationAngle--;
@@ -337,7 +335,6 @@ void loop() {
   // ------------------------------------------------------------
   // BUCKET PWM SERVO
   // ------------------------------------------------------------
-  // Still held at startup angle until you assign a channel to it
   bucketServo.write(bucketAngle);
 
   // ------------------------------------------------------------
@@ -359,18 +356,15 @@ void loop() {
   // ------------------------------------------------------------
   // ARM LIFT ACTUATOR (CH7)
   // ------------------------------------------------------------
+  // Positive (+1) -> UP, Negative (-1) -> DOWN, Neutral (0) -> STOP
   int armLiftState = read3PosChannel(ARM_LIFT_CRSF_CH);
   driveActuator(ARM_UP_PIN, ARM_DOWN_PIN, armLiftState);
 
   // ------------------------------------------------------------
   // CLAW ACTUATOR (CH6)
   // ------------------------------------------------------------
-  int rawClaw = crsf.getChannel(CLAW_CRSF_CH);
-  int clawState = 1; // STOP
-  if (rawClaw != 0) {
-    if (rawClaw < SW_LOW_MAX) clawState = 2;         // Negative -> Close
-    else if (rawClaw > SW_HIGH_MIN) clawState = 0;   // Positive -> Open
-  }
+  // Positive (+1) -> OPEN, Negative (-1) -> CLOSE, Neutral (0) -> STOP
+  int clawState = read3PosChannel(CLAW_CRSF_CH);
   driveActuator(CLAW_OPEN_PIN, CLAW_CLOSE_PIN, clawState);
 
   // ------------------------------------------------------------
@@ -380,21 +374,18 @@ void loop() {
   if (millis() - last > 250) {
     last = millis();
 
-    const char* armLiftStr = (armLiftState == 0) ? "UP"
-                             : (armLiftState == 2) ? "DOWN"
-                                                   : "STOP";
+    const char* armLiftStr = (armLiftState == 1) ? "UP"
+                           : (armLiftState == -1) ? "DOWN"
+                                                  : "STOP";
 
-    const char* clawStr = (clawState == 0) ? "OPEN"
-                          : (clawState == 2) ? "CLOSE"
-                                             : "STOP";
+    const char* clawStr = (clawState == 1) ? "OPEN"
+                        : (clawState == -1) ? "CLOSE"
+                                            : "STOP";
 
     const char* armBusStr = (rawArmBusSw < (int)SW_LOW_MAX) ? "LOW"
-                            : (rawArmBusSw > (int)SW_HIGH_MIN) ? "HIGH"
-                                                               : "MID";
+                          : (rawArmBusSw > (int)SW_HIGH_MIN) ? "HIGH"
+                                                             : "MID";
 
-    int busCh = crsf.getChannel(ARM_BUS_SWITCH_CRSF_CH);
-    int liftCh = crsf.getChannel(ARM_LIFT_CRSF_CH);
-    int clawCh = crsf.getChannel(CLAW_CRSF_CH);
     int rawCh3 = crsf.getChannel(3);
     int rawCh4 = crsf.getChannel(4);
 
