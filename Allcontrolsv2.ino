@@ -14,7 +14,8 @@ const uint8_t ARM_BUS_SERVO_ID = 1;
 LX16A armBusServo(ARM_BUS_SERVO_ID, Serial5);
 
 // PWM servos
-const int ROTATION_SERVO_PIN = 11;
+// Pin 11 conflicts with motor pin 5 (both FlexPWM2 SM1) — moved to pin 6
+const int ROTATION_SERVO_PIN = 6;
 const int BUCKET_SERVO_PIN   = 12;
 
 // Drive motor driver pins (verified by pin map test)
