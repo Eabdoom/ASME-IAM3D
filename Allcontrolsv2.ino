@@ -234,6 +234,25 @@ void setup() {
   ensureBucketServoAttached();       // attach and move bucket slowly to rest
   slowMovePWMServo(bucketServo, 90, BUCKET_START_POS, STARTUP_STEP_DELAY_MS);
   bucketAngle = BUCKET_START_POS;
+
+  // ---- PIN MAP TEST ----
+  // Fires each motor pin alone for 1.5s so you can see which motor/direction it is.
+  // Order: pin 2 → pin 3 → pin 4 → pin 5
+  // Watch which motor moves at each step and note it down.
+  Serial.println("=== PIN MAP TEST: pin 2 ===");
+  analogWrite(2, 512); delay(1500); analogWrite(2, 0); delay(500);
+
+  Serial.println("=== PIN MAP TEST: pin 3 ===");
+  analogWrite(3, 512); delay(1500); analogWrite(3, 0); delay(500);
+
+  Serial.println("=== PIN MAP TEST: pin 4 ===");
+  analogWrite(4, 512); delay(1500); analogWrite(4, 0); delay(500);
+
+  Serial.println("=== PIN MAP TEST: pin 5 ===");
+  analogWrite(5, 512); delay(1500); analogWrite(5, 0); delay(500);
+
+  Serial.println("=== PIN MAP TEST DONE — entering normal operation ===");
+  // ---- END PIN MAP TEST ----
 }
 
 // ============================================================
@@ -243,16 +262,48 @@ void setup() {
 void loop() {
   crsf.update();
 
-  // Debug: type H to toggle LX16A arm bus servo between 70 and 90
+  // Serial debug commands
   if (Serial.available()) {
     char cmd = Serial.read();
+
     if (cmd == 'H' || cmd == 'h') {
       static bool toggled = false;
       int testAngle = toggled ? 70 : 90;
       toggled = !toggled;
       armBusServo.move(testAngle, 700);
       armBusAngle = testAngle;
-      Serial.printf("[DEBUG] H received - moving arm bus servo to %d deg\n", testAngle);
+      Serial.printf("[DEBUG] H - arm bus servo to %d deg\n", testAngle);
+    }
+
+    // Individual pin tests — fire one pin at a time to map which pin = which motor/direction
+    // Stop with X between each test.
+    else if (cmd == '1') {
+      analogWrite(2, 512); analogWrite(3, 0); analogWrite(4, 0); analogWrite(5, 0);
+      Serial.println("[DEBUG] 1 - pin 2 only at 50%");
+    }
+    else if (cmd == '2') {
+      analogWrite(2, 0); analogWrite(3, 512); analogWrite(4, 0); analogWrite(5, 0);
+      Serial.println("[DEBUG] 2 - pin 3 only at 50%");
+    }
+    else if (cmd == '3') {
+      analogWrite(2, 0); analogWrite(3, 0); analogWrite(4, 512); analogWrite(5, 0);
+      Serial.println("[DEBUG] 3 - pin 4 only at 50%");
+    }
+    else if (cmd == '4') {
+      analogWrite(2, 0); analogWrite(3, 0); analogWrite(4, 0); analogWrite(5, 512);
+      Serial.println("[DEBUG] 4 - pin 5 only at 50%");
+    }
+    else if (cmd == 'X' || cmd == 'x') {
+      analogWrite(2, 0); analogWrite(3, 0); analogWrite(4, 0); analogWrite(5, 0);
+      Serial.println("[DEBUG] X - all pins stopped");
+    }
+    // Print all 16 CRSF channels
+    else if (cmd == 'P' || cmd == 'p') {
+      Serial.print("[DEBUG] CH: ");
+      for (int i = 1; i <= 16; i++) {
+        Serial.printf("%2d=%4d  ", i, crsf.getChannel(i));
+      }
+      Serial.println();
     }
   }
 
