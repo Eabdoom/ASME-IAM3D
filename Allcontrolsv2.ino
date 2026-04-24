@@ -35,8 +35,8 @@ const int CLAW_CLOSE_PIN = 10;
 // CRSF CHANNEL MAP
 // ============================================================
 
-// CH1 = steering / rotation servo
-// CH2 = throttle
+// CH3 = throttle (left stick vertical)
+// CH4 = steering (left stick horizontal)
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
 const uint8_t ARM_LIFT_CRSF_CH       = 6;
 const uint8_t CLAW_CRSF_CH           = 6;
@@ -303,7 +303,7 @@ void loop() {
   // ------------------------------------------------------------
   // DRIVE MOTORS
   // ------------------------------------------------------------
-  float throttle = channelNorm(2);
+  float throttle = channelNorm(3);
   float steering = channelNorm(4);
 
   float left  = throttle + steering;
