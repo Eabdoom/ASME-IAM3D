@@ -342,10 +342,10 @@ void loop() {
   int targetBucketAngle = (bucketSwState == 1) ? BUCKET_DROP_POS : BUCKET_START_POS;
 
   static unsigned long lastBucketUpdate = 0;
-  if (millis() - lastBucketUpdate > 20) {
+  if (millis() - lastBucketUpdate > 30) {
     lastBucketUpdate = millis();
-    if (bucketAngle < targetBucketAngle)      bucketAngle = min(bucketAngle + 2, targetBucketAngle);
-    else if (bucketAngle > targetBucketAngle) bucketAngle = max(bucketAngle - 2, targetBucketAngle);
+    if (bucketAngle < targetBucketAngle)      bucketAngle = min(bucketAngle + 1, targetBucketAngle);
+    else if (bucketAngle > targetBucketAngle) bucketAngle = max(bucketAngle - 1, targetBucketAngle);
     bucketServo.write(bucketAngle);
   }
 

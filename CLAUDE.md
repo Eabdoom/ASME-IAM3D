@@ -4,83 +4,93 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an Arduino/Teensy firmware repository for an ASME IAM3D robotics competition robot — a remote-controlled excavator-style machine. All files are `.ino` sketches; there is no build system, test framework, or package manager. Code is compiled and uploaded via the **Arduino IDE** or **Teensyduino** toolchain.
+Arduino/Teensy firmware for an ASME IAM3D competition robot — a remote-controlled excavator. All files are standalone `.ino` sketches. No build system, no tests. Compiled and uploaded via **Arduino IDE + Teensyduino**.
+
+## Active File
+
+**`Allcontrolsv2.ino`** is the only file being actively developed. All other `.ino` files are legacy prototypes for earlier hardware configurations — do not touch them unless asked.
 
 ## Hardware Platform
 
-- **Primary target**: Teensy 4.1 (ARM Cortex-M7, 600 MHz)
-- **Legacy/alternate targets**: Teensy 4.0, Teensy 3.6, Arduino Uno R3
+- **Board**: Teensy 4.1
+- **RC**: ELRS receiver on Serial1 via `AlfredoCRSF` library
+- **Drive**: 4-pin H-bridge, 10-bit PWM at 20kHz
+- **Arm servo**: LX16A smart servo (ID 1) on Serial5, TX=pin 20 only (half-duplex, pin 21 not used)
+- **PWM servos**: Rotation (pin 11), Bucket (pin 12) via `Servo` library
+- **Actuators**: Arm lift (pins 22/23), Claw (pins 9/10) — digital H-bridge, no PWM
 
-Key hardware:
-- **Drive**: 4 H-bridge motor channels (LF/RF/LB/RB), 10-bit PWM at 20 kHz
-- **RC receiver**: ELRS/CRSF receiver on Serial1 at `CRSF_BAUDRATE` (~420 kbps), read via `AlfredoCRSF` library
-- **Arm bus servo**: LX16A serial servo (ID 1) on Serial5 (TX=pin 20, RX=pin 21) via `LX16A-bus` library, 0–240° range
-- **PWM servos**: Rotation servo (pin 11) and bucket servo (pin 12) via standard `Servo` library
-- **Linear actuators**: Arm lift (pins 7/8) and claw (pins 9/10) driven as H-bridges with `digitalWrite`
+## Verified Pin Map (Allcontrolsv2.ino)
 
-## File Inventory
+These were confirmed by a physical pin-fire test on the actual hardware.
 
-| File | Purpose | Target |
-|---|---|---|
-| `Allcontrolsv2.ino` | **Main integration firmware** — all subsystems unified | Teensy 4.1 |
-| `All_Controls.ino` | Earlier combined version with two LX16A servos | Teensy 4.1 |
-| `Claw + movement.ino` | Drive + claw actuator, no arm servo | Teensy 4.0 |
-| `ArmServo(Teensy4.0).ino` | Drive + single LX16A arm servo | Teensy 4.0 |
-| `ArmServo(Arduino).ino` | LX16A sweep test only | Arduino Uno |
-| `servo41.ino` | LX16A auto-sweep test on Serial2 | Teensy 4.1 |
-| `MotorControlArduino.ino` | Drive only, CRSF + keyboard fallback, 8-bit PWM | Arduino Uno R3 |
-| `Motor Control (Teensy 4.0)` | Drive only | Teensy 4.0 |
-| `teensy 3.6 motor control.ino` | Drive only | Teensy 3.6 |
-| `sketch_nov11b.ino` | CRSF packet-received test sketch | Arduino Mega/etc |
+| Pin | Function | Type |
+|-----|----------|------|
+| 2 | Right motor — backward | PWM 20kHz |
+| 3 | Right motor — forward | PWM 20kHz |
+| 4 | Left motor — backward | PWM 20kHz |
+| 5 | Left motor — forward | PWM 20kHz |
+| 9 | Claw — open | Digital |
+| 10 | Claw — close | Digital |
+| 11 | Rotation servo | Servo (50Hz) |
+| 12 | Bucket servo | Servo (50Hz) |
+| 20 | LX16A TX (half-duplex) | Serial5 TX |
+| 22 | Arm lift — up | Digital |
+| 23 | Arm lift — down | Digital |
 
 ## CRSF Channel Map (Allcontrolsv2.ino)
 
-| Channel | Function |
-|---|---|
-| CH2 | Throttle (forward/back) |
-| CH4 | Steering (left/right) |
-| CH6 | Arm lift actuator AND claw actuator (shared — 3-pos switch) |
-| CH9 | LX16A arm bus servo (3-pos switch: low=extend, mid=hold, high=retract) |
-| CH11 | Rotation PWM servo (analog stick mapped to 0–180°) |
+| CH | Function | Notes |
+|----|----------|-------|
+| 3 | Drive throttle | Left stick vertical. Set `THROTTLE_INVERTED = true` if forward/backward is reversed |
+| 4 | Drive steering | Left stick horizontal |
+| 6 | Claw open/close | Switch: high = open, low = close |
+| 7 | Arm lift | Switch: high = up, low = down |
+| 8 | Bucket dump | SE button: high = dump (10°), off = hold (170°) |
+| 9 | LX16A arm servo | 3-pos switch: low = extend, mid = hold, high = retract |
+| 11 | Rotation servo | Analog — maps to 0–180° |
 
-CRSF raw values: 989–2012 µs, center ≈ 1500. Switch thresholds: LOW < 1300, HIGH > 1700.
+CRSF raw range: 989–2012, center ≈ 1500. Switch thresholds: LOW < 1300, HIGH > 1700.
 
-## Core Patterns
+## Core Functions
 
 **`channelNorm(ch)`** — normalizes CRSF raw to −1…+1 with 4% deadband. Returns 0.0 on failsafe (raw == 0).
 
-**`read3PosChannel(ch)`** — returns 0 (low), 1 (mid/stop), or 2 (high) for switch channels.
+**`read3PosChannel(ch)`** — returns `1` (high), `0` (mid/stop), `-1` (low) for switch channels.
 
-**`driveMotor(forwardPin, backwardPin, norm)`** — maps normalized float to 10-bit PWM on an H-bridge pair.
+**`driveMotor(forwardPin, backwardPin, norm)`** — 10-bit PWM on H-bridge pair. Inactive pin is forced to digital LOW (not PWM 0) to ensure clean H-bridge state. Has change-detection to avoid hammering registers every loop.
 
-**`driveActuator(pinA, pinB, state)`** — drives a linear actuator: state 0 = extend, 1 = stop, 2 = retract.
+**`driveActuator(posPin, negPin, state)`** — digital H-bridge: state `1` = extend, `-1` = retract, `0` = stop.
 
-**LX16A arm bus servo** is stepped incrementally each loop tick (rate-limited by `ARM_BUS_MS = 60 ms`) rather than mapped directly, giving smooth motion from a 3-pos switch.
+**LX16A arm servo** — incremental stepping (1° per 60ms) from a 3-pos switch. Does not home on startup to avoid violent jumps.
 
-**Rotation servo** is also rate-limited (one degree per 15 ms) to smooth stick input.
+**Bucket servo** — moves at 1°/30ms (~33°/sec). SE button high sweeps to `BUCKET_DROP_POS`, off returns to `BUCKET_START_POS`.
+
+**Rotation servo** — moves at 1°/15ms, smoothing stick input.
+
+## Key Tuning Constants
+
+| Constant | Default | Purpose |
+|----------|---------|---------|
+| `THROTTLE_INVERTED` | `false` | Flip if robot drives backward when pushing forward |
+| `BUCKET_START_POS` | `170` | Bucket rest angle |
+| `BUCKET_DROP_POS` | `10` | Bucket dump angle |
+| `ARM_BUS_STEP` | `1` | LX16A degrees per step — decrease to smooth |
+| `ARM_BUS_MS` | `60` | LX16A step interval ms — increase to slow |
 
 ## Build & Upload
 
-There is no Makefile. Use the Arduino IDE with Teensyduino installed:
-1. Open the target `.ino` in Arduino IDE.
-2. Set **Tools → Board** to the correct Teensy or Arduino model.
-3. Set **Tools → USB Type** to "Serial" for debug output.
-4. Click **Upload** (or Sketch → Upload).
+1. Open `.ino` in Arduino IDE with Teensyduino installed.
+2. **Tools → Board → Teensy 4.1**
+3. **Tools → USB Type → Serial**
+4. Upload. Serial Monitor at **115200 baud**.
 
-For serial debug output, open **Tools → Serial Monitor** at **115200 baud**. The main loop prints status every 250 ms.
-
-**Debug command**: sending `H` or `h` via Serial Monitor toggles the LX16A arm bus servo between 70° and 90° for bench testing without a connected receiver.
+Serial debug commands (type in Serial Monitor):
+- `H` — toggle LX16A arm servo between 70° and 90°
+- `P` — print all 16 CRSF channel raw values
+- `X` — stop all drive motors
 
 ## Required Libraries
 
-Install via Arduino Library Manager or manually:
-- `AlfredoCRSF` — ELRS/CRSF receiver protocol
-- `LX16A-bus` (alecxcode) — half-duplex serial bus for LX16A smart servos
-- `Servo` — built-in Arduino/Teensy library for PWM servos
-
-## Known Issues / Design Notes
-
-- CH6 is assigned to **both** `ARM_LIFT_CRSF_CH` and `CLAW_CRSF_CH` in `Allcontrolsv2.ino` — this is a known conflict; they cannot be independently controlled as-is.
-- The bucket servo has no assigned control channel; it is held at `BUCKET_START_POS = 170°` during operation.
-- The LX16A arm servo is **not** moved to a park position on startup (a deliberate fix to prevent violent jumps); `armBusAngle` starts at 0 but the physical servo is wherever it last stopped.
-- `analogWriteResolution(10)` is Teensy-specific; Arduino Uno uses 8-bit PWM — `MotorControlArduino.ino` accounts for this.
+- `AlfredoCRSF` — ELRS/CRSF protocol
+- `LX16A-bus` (alecxcode) — LX16A half-duplex serial servo
+- `Servo` — built-in Teensy/Arduino PWM servo library

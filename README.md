@@ -14,12 +14,11 @@ Firmware: `Allcontrolsv2.ino` | Board: **Teensy 4.1**
 | 3 | H-Bridge RIGHT — IN1 | PWM 10-bit 20kHz | Right Forward |
 | 4 | H-Bridge LEFT — IN2 | PWM 10-bit 20kHz | Left Backward |
 | 5 | H-Bridge LEFT — IN1 | PWM 10-bit 20kHz | Left Forward |
-| 7 | Rotation Servo — signal | PWM 50Hz (Servo) | Slew-rate limited in code |
+| 7 | Rotation Servo — signal | PWM 50Hz (Servo) | Moves smoothly (1°/15ms) instead of snapping |
 | 9 | Claw Actuator — IN1 | Digital OUT | Claw Open |
 | 10 | Claw Actuator — IN2 | Digital OUT | Claw Close |
 | 12 | Bucket Servo — signal | PWM 50Hz (Servo) | SE button controlled |
-| 20 | LX16A Bus Servo — TX | Serial5 TX | Half-duplex bus |
-| 21 | LX16A Bus Servo — RX | Serial5 RX | Half-duplex bus |
+| 20 | LX16A Bus Servo — TX | Serial5 TX | Half-duplex, single wire only |
 | 22 | Arm Lift Actuator — IN1 | Digital OUT | Arm Up |
 | 23 | Arm Lift Actuator — IN2 | Digital OUT | Arm Down |
 
@@ -72,7 +71,7 @@ Motor PWM: 10-bit resolution (0–1023), 20 kHz switching frequency (silent to h
 | Rest / Hold | 170° (`BUCKET_START_POS`) | SE switch off |
 | Dump | 10° (`BUCKET_DROP_POS`) | SE switch high |
 
-Servo moves at 2°/20ms (~100°/sec). Adjust `BUCKET_DROP_POS` in code if the dump angle needs tuning.
+Servo moves at 1°/30ms (~33°/sec, ~5 seconds full travel). Adjust `BUCKET_DROP_POS` in code if the dump angle needs tuning.
 
 ---
 
