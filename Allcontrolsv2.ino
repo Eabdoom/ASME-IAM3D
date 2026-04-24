@@ -9,7 +9,9 @@ AlfredoCRSF crsf;
 // PIN MAP
 // ============================================================
 
-// LX16A bus servo on Serial5: TX=20, RX=21
+// LX16A arm bus servo
+// Use Serial5 TX only: pin 20 -> servo signal
+// Pin 21 (RX) is not wired / not used
 const uint8_t ARM_BUS_SERVO_ID = 1;
 LX16A armBusServo(ARM_BUS_SERVO_ID, Serial5);
 
@@ -17,33 +19,33 @@ LX16A armBusServo(ARM_BUS_SERVO_ID, Serial5);
 const int ROTATION_SERVO_PIN = 11;
 const int BUCKET_SERVO_PIN   = 12;
 
-// Drive motor driver pins (verified by pin map test)
-const int LF_PIN = 5;  // Left  forward
-const int LB_PIN = 4;  // Left  backward
-const int RF_PIN = 3;  // Right forward
-const int RB_PIN = 2;  // Right backward
+// Drive motor driver pins
+const int LF_PIN = 5;   // Left  forward
+const int LB_PIN = 4;   // Left  backward
+const int RF_PIN = 3;   // Right forward
+const int RB_PIN = 2;   // Right backward
 
 // Arm lift actuator pins
 const int ARM_UP_PIN   = 22;
 const int ARM_DOWN_PIN = 23;
 
 // Claw actuator pins
-const int CLAW_OPEN_PIN  = 9;
-const int CLAW_CLOSE_PIN = 10;
+const int CLAW_OPEN_PIN  = 8;
+const int CLAW_CLOSE_PIN = 9;
 
 // ============================================================
 // CRSF CHANNEL MAP
 // ============================================================
 
-// CH3 = throttle (left stick vertical)
-// CH4 = steering (left stick horizontal)
-// If robot goes backward when pushing forward, flip this to true
+// CH3 = throttle
+// CH4 = steering
 const bool THROTTLE_INVERTED = false;
 
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
 const uint8_t ARM_LIFT_CRSF_CH       = 7;
 const uint8_t CLAW_CRSF_CH           = 6;
-const uint8_t BUCKET_CRSF_CH         = 8;  // SE button
+const uint8_t BUCKET_CRSF_CH         = 8;
+const uint8_t ROTATION_CRSF_CH       = 11;
 
 const uint16_t SW_LOW_MAX  = 1300;
 const uint16_t SW_HIGH_MIN = 1700;
@@ -76,8 +78,8 @@ int rotationAngle = 90;
 
 const int BUCKET_MIN       = 0;
 const int BUCKET_MAX       = 180;
-const int BUCKET_START_POS = 170;  // resting / hold position
-const int BUCKET_DROP_POS  = 10;   // dump position when SE pressed
+const int BUCKET_START_POS = 170;  // hold/rest
+const int BUCKET_DROP_POS  = 10;   // dump
 int bucketAngle = BUCKET_START_POS;
 
 const int STARTUP_STEP_DELAY_MS = 45;
@@ -105,7 +107,7 @@ void ensureBucketServoAttached() {
 float channelNorm(int ch) {
   uint16_t raw = crsf.getChannel(ch);
 
-  // Failsafe: if CRSF connection has not established, return 0.0 (Stop)
+  // If CRSF is not established, stop
   if (raw == 0) return 0.0f;
 
   const float RAW_MIN = 989.0f;
@@ -115,70 +117,56 @@ float channelNorm(int ch) {
 
   float norm = (raw - RAW_CENTER) / HALF_RANGE;
   norm = constrain(norm, -1.0f, 1.0f);
-  
-  // 4% Deadband to eliminate stick jitter and servo twitch
-  if (fabs(norm) < 0.04f) {
-    return 0.0f;
-  }
+
+  // Small deadband
+  if (fabs(norm) < 0.04f) return 0.0f;
+
   return norm;
 }
 
-// Updated to return cleanly mapped states: 1 (Positive), -1 (Negative), 0 (Neutral)
+// Returns:
+//  1  = positive/high
+//  0  = neutral/middle
+// -1  = negative/low
 int read3PosChannel(uint8_t ch) {
   uint16_t raw = crsf.getChannel(ch);
 
-  // Failsafe: if CRSF hasn't connected, return STOP logic (0)
   if (raw == 0) return 0;
-
-  if (raw < SW_LOW_MAX) return -1; // Negative signal
-  if (raw > SW_HIGH_MIN) return 1; // Positive signal
-  return 0;                        // Neutral signal
+  if (raw < SW_LOW_MAX)  return -1;
+  if (raw > SW_HIGH_MIN) return 1;
+  return 0;
 }
 
 void driveMotor(int forwardPin, int backwardPin, float norm) {
-  // Track last known states to prevent hammering the registers at 600MHz
-  static float lastNormLF = -2.0f, lastNormRF = -2.0f;
-  
-  // Identify which motor we are updating to use the correct state tracker
-  float *lastNorm = (forwardPin == LF_PIN) ? &lastNormLF : &lastNormRF;
-
-  // Only update hardware if the input value actually changed
-  if (fabs(norm - *lastNorm) < 0.001f) return;
-  *lastNorm = norm;
-
   float speed = fabs(norm);
   if (speed < 0.02f) speed = 0.0f;
 
   uint16_t pwm = (uint16_t)(speed * 1023.0f);
 
   if (speed == 0.0f) {
-    // True stop: pull both pins off the PWM mux and force absolute LOW
-    pinMode(forwardPin, OUTPUT);
-    pinMode(backwardPin, OUTPUT);
+    analogWrite(forwardPin, 0);
+    analogWrite(backwardPin, 0);
     digitalWrite(forwardPin, LOW);
     digitalWrite(backwardPin, LOW);
   } else if (norm > 0.0f) {
-    // Forward: force backward pin LOW, PWM the forward pin
-    pinMode(backwardPin, OUTPUT);
     digitalWrite(backwardPin, LOW);
     analogWrite(forwardPin, pwm);
+    analogWrite(backwardPin, 0);
   } else {
-    // Backward: force forward pin LOW, PWM the backward pin
-    pinMode(forwardPin, OUTPUT);
     digitalWrite(forwardPin, LOW);
+    analogWrite(forwardPin, 0);
     analogWrite(backwardPin, pwm);
   }
 }
 
-// Updated to map the 1, -1, 0 states directly to hardware pins
 void driveActuator(int posPin, int negPin, int state) {
-  if (state == 1) {             // Positive signal
+  if (state == 1) {
     digitalWrite(posPin, HIGH);
     digitalWrite(negPin, LOW);
-  } else if (state == -1) {     // Negative signal
+  } else if (state == -1) {
     digitalWrite(posPin, LOW);
     digitalWrite(negPin, HIGH);
-  } else {                      // Neutral (0)
+  } else {
     digitalWrite(posPin, LOW);
     digitalWrite(negPin, LOW);
   }
@@ -223,7 +211,7 @@ void setup() {
   pinMode(CLAW_OPEN_PIN, OUTPUT);
   pinMode(CLAW_CLOSE_PIN, OUTPUT);
 
-  // Start outputs safe
+  // Start safe
   digitalWrite(LF_PIN, LOW);
   digitalWrite(RF_PIN, LOW);
   digitalWrite(LB_PIN, LOW);
@@ -247,14 +235,15 @@ void setup() {
   crsf.begin(Serial1);
 
   // LX16A bus servo
+  // Using Serial5 TX only in wiring
   Serial5.begin(115200);
   armBusServo.initialize(115200);
   armBusServo.enableTorque();
   armBusServo.setServoMode();
 
-  // PWM servos back on
-  ensureRotationServoAttached();     // attach only, no startup move
-  ensureBucketServoAttached();       // attach and move bucket slowly to rest
+  // PWM servos
+  ensureRotationServoAttached();   // attach only, no startup move
+  ensureBucketServoAttached();     // attach and move bucket to hold position
   slowMovePWMServo(bucketServo, 90, BUCKET_START_POS, STARTUP_STEP_DELAY_MS);
   bucketAngle = BUCKET_START_POS;
 }
@@ -266,7 +255,7 @@ void setup() {
 void loop() {
   crsf.update();
 
-  // Serial debug commands
+  // ---------------- Debug ----------------
   if (Serial.available()) {
     char cmd = Serial.read();
 
@@ -278,13 +267,11 @@ void loop() {
       armBusAngle = testAngle;
       Serial.printf("[DEBUG] H - arm bus servo to %d deg\n", testAngle);
     }
-
     else if (cmd == 'X' || cmd == 'x') {
-      analogWrite(LF_PIN, 0); analogWrite(LB_PIN, 0);
-      analogWrite(RF_PIN, 0); analogWrite(RB_PIN, 0);
+      driveMotor(LF_PIN, LB_PIN, 0.0f);
+      driveMotor(RF_PIN, RB_PIN, 0.0f);
       Serial.println("[DEBUG] X - motors stopped");
     }
-    // Print all 16 CRSF channels
     else if (cmd == 'P' || cmd == 'p') {
       Serial.print("[DEBUG] CH: ");
       for (int i = 1; i <= 16; i++) {
@@ -295,7 +282,7 @@ void loop() {
   }
 
   // ------------------------------------------------------------
-  // LX16A ARM BUS SERVO CONTROL (CH9, 3-position)
+  // LX16A ARM BUS SERVO (CH9)
   // ------------------------------------------------------------
   int rawArmBusSw = crsf.getChannel(ARM_BUS_SWITCH_CRSF_CH);
 
@@ -322,12 +309,12 @@ void loop() {
   // ------------------------------------------------------------
   // ROTATION PWM SERVO (CH11)
   // ------------------------------------------------------------
-  float ch11Norm = channelNorm(11);
-  int targetRotationAngle = (int)((ch11Norm + 1.0f) * 0.5f * 180.0f);
+  float chRotNorm = channelNorm(ROTATION_CRSF_CH);
+  int targetRotationAngle = (int)((chRotNorm + 1.0f) * 0.5f * 180.0f);
   targetRotationAngle = constrain(targetRotationAngle, ROTATION_MIN, ROTATION_MAX);
 
   static unsigned long lastRotUpdate = 0;
-  if (millis() - lastRotUpdate > 15) { 
+  if (millis() - lastRotUpdate > 15) {
     lastRotUpdate = millis();
     if (rotationAngle < targetRotationAngle) rotationAngle++;
     else if (rotationAngle > targetRotationAngle) rotationAngle--;
@@ -335,8 +322,8 @@ void loop() {
   }
 
   // ------------------------------------------------------------
-  // BUCKET PWM SERVO (CH8 / SE button)
-  // SE high = dump (BUCKET_DROP_POS), all other positions = hold (BUCKET_START_POS)
+  // BUCKET PWM SERVO (CH8)
+  // high = drop, anything else = hold
   // ------------------------------------------------------------
   int bucketSwState = read3PosChannel(BUCKET_CRSF_CH);
   int targetBucketAngle = (bucketSwState == 1) ? BUCKET_DROP_POS : BUCKET_START_POS;
@@ -344,8 +331,13 @@ void loop() {
   static unsigned long lastBucketUpdate = 0;
   if (millis() - lastBucketUpdate > 30) {
     lastBucketUpdate = millis();
-    if (bucketAngle < targetBucketAngle)      bucketAngle = min(bucketAngle + 1, targetBucketAngle);
-    else if (bucketAngle > targetBucketAngle) bucketAngle = max(bucketAngle - 1, targetBucketAngle);
+
+    if (bucketAngle < targetBucketAngle) {
+      bucketAngle = min(bucketAngle + 1, targetBucketAngle);
+    } else if (bucketAngle > targetBucketAngle) {
+      bucketAngle = max(bucketAngle - 1, targetBucketAngle);
+    }
+
     bucketServo.write(bucketAngle);
   }
 
@@ -368,14 +360,12 @@ void loop() {
   // ------------------------------------------------------------
   // ARM LIFT ACTUATOR (CH7)
   // ------------------------------------------------------------
-  // Positive (+1) -> UP, Negative (-1) -> DOWN, Neutral (0) -> STOP
   int armLiftState = read3PosChannel(ARM_LIFT_CRSF_CH);
   driveActuator(ARM_UP_PIN, ARM_DOWN_PIN, armLiftState);
 
   // ------------------------------------------------------------
   // CLAW ACTUATOR (CH6)
   // ------------------------------------------------------------
-  // Positive (+1) -> OPEN, Negative (-1) -> CLOSE, Neutral (0) -> STOP
   int clawState = read3PosChannel(CLAW_CRSF_CH);
   driveActuator(CLAW_OPEN_PIN, CLAW_CLOSE_PIN, clawState);
 
@@ -391,12 +381,12 @@ void loop() {
                                                   : "STOP";
 
     const char* clawStr = (clawState == 1) ? "OPEN"
-                        : (clawState == -1) ? "CLOSE"
-                                            : "STOP";
+                         : (clawState == -1) ? "CLOSE"
+                                             : "STOP";
 
     const char* armBusStr = (rawArmBusSw < (int)SW_LOW_MAX) ? "LOW"
-                          : (rawArmBusSw > (int)SW_HIGH_MIN) ? "HIGH"
-                                                             : "MID";
+                           : (rawArmBusSw > (int)SW_HIGH_MIN) ? "HIGH"
+                                                              : "MID";
 
     int rawCh3 = crsf.getChannel(3);
     int rawCh4 = crsf.getChannel(4);
