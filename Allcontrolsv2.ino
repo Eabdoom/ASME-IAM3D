@@ -37,6 +37,9 @@ const int CLAW_CLOSE_PIN = 10;
 
 // CH3 = throttle (left stick vertical)
 // CH4 = steering (left stick horizontal)
+// If robot goes backward when pushing forward, flip this to true
+const bool THROTTLE_INVERTED = false;
+
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
 const uint8_t ARM_LIFT_CRSF_CH       = 6;
 const uint8_t CLAW_CRSF_CH           = 6;
@@ -304,6 +307,7 @@ void loop() {
   // DRIVE MOTORS
   // ------------------------------------------------------------
   float throttle = channelNorm(3);
+  if (THROTTLE_INVERTED) throttle = -throttle;
   float steering = channelNorm(4);
 
   float left  = throttle + steering;
@@ -354,12 +358,13 @@ void loop() {
     int busCh = crsf.getChannel(ARM_BUS_SWITCH_CRSF_CH);
     int liftCh = crsf.getChannel(ARM_LIFT_CRSF_CH);
     int clawCh = crsf.getChannel(CLAW_CRSF_CH);
+    int rawCh3 = crsf.getChannel(3);
+    int rawCh4 = crsf.getChannel(4);
 
-    Serial.printf("[ARM_BUS ch%d]%-4s raw=%4d arm=%3d deg  [ROT]%3d deg [BUCKET]%3d deg  [ARM_LIFT]%s  [CLAW]%s  BusCh=%4d LiftCh=%4d ClawCh=%4d  [DRIVE] T=%.2f S=%.2f L=%.2f R=%.2f\n",
+    Serial.printf("[DRIVE] CH3raw=%4d T=%6.2f  CH4raw=%4d S=%6.2f  L=%6.2f R=%6.2f  |  [ARM_BUS ch%d]%-4s raw=%4d arm=%3d deg  [ROT]%3d deg [BUCKET]%3d deg  [ARM_LIFT]%s  [CLAW]%s\n",
+                  rawCh3, throttle, rawCh4, steering, left, right,
                   ARM_BUS_SWITCH_CRSF_CH, armBusStr, rawArmBusSw, armBusAngle,
                   rotationAngle, bucketAngle,
-                  armLiftStr, clawStr,
-                  busCh, liftCh, clawCh,
-                  throttle, steering, left, right);
+                  armLiftStr, clawStr);
   }
 }
