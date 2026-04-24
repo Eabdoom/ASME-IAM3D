@@ -14,8 +14,7 @@ const uint8_t ARM_BUS_SERVO_ID = 1;
 LX16A armBusServo(ARM_BUS_SERVO_ID, Serial5);
 
 // PWM servos
-// Pin 11 conflicts with motor pin 5 (both FlexPWM2 SM1) — moved to pin 6
-const int ROTATION_SERVO_PIN = 6;
+const int ROTATION_SERVO_PIN = 11;
 const int BUCKET_SERVO_PIN   = 12;
 
 // Drive motor driver pins (verified by pin map test)
@@ -42,7 +41,7 @@ const int CLAW_CLOSE_PIN = 10;
 const bool THROTTLE_INVERTED = false;
 
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 9;
-const uint8_t ARM_LIFT_CRSF_CH       = 6;
+const uint8_t ARM_LIFT_CRSF_CH       = 7;  // <-- Fixed: Moved to CH7
 const uint8_t CLAW_CRSF_CH           = 6;
 
 const uint16_t SW_LOW_MAX  = 1300;
@@ -133,17 +132,38 @@ int read3PosChannel(uint8_t ch) {
   return 2;
 }
 
+// <-- Fixed: Replaced with state-tracking and hardware-decoupling version
 void driveMotor(int forwardPin, int backwardPin, float norm) {
+  // Track last known states to prevent hammering the registers at 600MHz
+  static float lastNormLF = -2.0f, lastNormRF = -2.0f;
+  
+  // Identify which motor we are updating to use the correct state tracker
+  float *lastNorm = (forwardPin == LF_PIN) ? &lastNormLF : &lastNormRF;
+
+  // Only update hardware if the input value actually changed
+  if (fabs(norm - *lastNorm) < 0.001f) return;
+  *lastNorm = norm;
+
   float speed = fabs(norm);
   if (speed < 0.02f) speed = 0.0f;
 
   uint16_t pwm = (uint16_t)(speed * 1023.0f);
 
-  if (norm >= 0.0f) {
+  if (speed == 0.0f) {
+    // True stop: pull both pins off the PWM mux and force absolute LOW
+    pinMode(forwardPin, OUTPUT);
+    pinMode(backwardPin, OUTPUT);
+    digitalWrite(forwardPin, LOW);
+    digitalWrite(backwardPin, LOW);
+  } else if (norm > 0.0f) {
+    // Forward: force backward pin LOW, PWM the forward pin
+    pinMode(backwardPin, OUTPUT);
+    digitalWrite(backwardPin, LOW);
     analogWrite(forwardPin, pwm);
-    analogWrite(backwardPin, 0);
   } else {
-    analogWrite(forwardPin, 0);
+    // Backward: force forward pin LOW, PWM the backward pin
+    pinMode(forwardPin, OUTPUT);
+    digitalWrite(forwardPin, LOW);
     analogWrite(backwardPin, pwm);
   }
 }
@@ -274,7 +294,7 @@ void loop() {
   }
 
   // ------------------------------------------------------------
-  // LX16A ARM BUS SERVO CONTROL (CH6, 3-position)
+  // LX16A ARM BUS SERVO CONTROL (CH9, 3-position)
   // ------------------------------------------------------------
   int rawArmBusSw = crsf.getChannel(ARM_BUS_SWITCH_CRSF_CH);
 
