@@ -39,13 +39,10 @@ const uint8_t STEERING_CRSF_CH       = 1;
 const uint8_t THROTTLE_CRSF_CH       = 2;
 const uint8_t ARM_LIFT_CRSF_CH       = 3;
 const uint8_t ROTATION_CRSF_CH       = 4;
-const uint8_t DRIVE_OVERRIDE_CRSF_CH = 5;   
+const uint8_t ARM_DISARM_CRSF_CH     = 5;   // Moved Arm/Disarm Kill Switch to CH5
 const uint8_t ARM_BUS_SWITCH_CRSF_CH = 6;
 const uint8_t CLAW_CRSF_CH           = 7;
 const uint8_t BUCKET_CRSF_CH         = 8;
-
-// NEW: Arm/Disarm Kill Switch
-const uint8_t ARM_DISARM_CRSF_CH     = 9;
 
 // Flip these if any directions are reversed
 const bool THROTTLE_INVERTED = false;
@@ -93,36 +90,9 @@ const int BUCKET_DROP_POSITIONS[10] = {
   117, 110, 103,  97,  90
 };
 
-int bucketProfileIndex = 0; 
+int bucketProfileIndex = 0; // Defaulting to the max drop (150 degrees)
 int bucketAngle = BUCKET_START_POS;
 
-// ============================================================
-// DRIVE OVERRIDE SETTINGS
-// ============================================================
-
-const float CH5_OVERRIDE_SPEED = 1.0f;
-
-int readDriveOverrideModeFromCH5() {
-  uint16_t raw = crsf.getChannel(DRIVE_OVERRIDE_CRSF_CH);
-  if (raw == 0) return 0;
-
-  const float RAW_MIN = 989.0f;
-  const float RAW_MAX = 2012.0f;
-  const float RAW_CENTER = (RAW_MIN + RAW_MAX) / 2.0f;
-  const float HALF_RANGE = (RAW_MAX - RAW_MIN) / 2.0f;
-
-  float norm = (raw - RAW_CENTER) / HALF_RANGE;
-  norm = constrain(norm, -1.0f, 1.0f);
-
-  if (norm <= 0.0f) return 0;
-
-  float pct = norm * 100.0f;
-
-  if (pct <= 25.0f) return 1;   
-  if (pct <= 50.0f) return 2;   
-  if (pct <= 75.0f) return 3;   
-  return 4;                     
-}
 
 // ============================================================
 // HELPERS
@@ -175,22 +145,6 @@ int readSignedAxisChannel(uint8_t ch, bool invert = false) {
   if (norm > 0.2f)  return 1;
   if (norm < -0.2f) return -1;
   return 0;
-}
-
-int read10BandChannelRaw(uint8_t ch) {
-  uint16_t raw = crsf.getChannel(ch);
-  if (raw == 0) return 5;
-
-  const int RAW_MIN = 989;
-  const int RAW_MAX = 2012;
-
-  int clamped = constrain((int)raw, RAW_MIN, RAW_MAX);
-  long scaled = (long)(clamped - RAW_MIN) * 10L / (RAW_MAX - RAW_MIN + 1);
-
-  if (scaled < 0) scaled = 0;
-  if (scaled > 9) scaled = 9;
-
-  return (int)scaled;
 }
 
 void driveMotor(int forwardPin, int backwardPin, float norm) {
@@ -249,7 +203,7 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) {}
 
-  Serial.println("Teensy 4.1 + CRSF main control (ARM/DISARM ENABLED)");
+  Serial.println("Teensy 4.1 + CRSF main control (ARM/DISARM ENABLED on CH5)");
 
   pinMode(LF_PIN, OUTPUT);
   pinMode(RF_PIN, OUTPUT);
@@ -290,7 +244,7 @@ void loop() {
   crsf.update();
 
   // ------------------------------------------------------------
-  // FAILSAFE CHECK (Channel 9)
+  // FAILSAFE CHECK (Channel 5)
   // ------------------------------------------------------------
   uint16_t rawArmSwitch = crsf.getChannel(ARM_DISARM_CRSF_CH);
   
@@ -304,7 +258,7 @@ void loop() {
     // Only print disarm status every 1 second to avoid flooding monitor
     static unsigned long lastDisarmPrint = 0;
     if (millis() - lastDisarmPrint > 1000) {
-      Serial.println("[WARNING] ROBOT DISARMED - Flipping CH9 Switch UP to arm.");
+      Serial.println("[WARNING] ROBOT DISARMED - Flipping CH5 Switch UP to arm.");
       lastDisarmPrint = millis();
     }
     return; // SKIP THE REST OF THE LOOP until armed!
@@ -331,8 +285,6 @@ void loop() {
       Serial.println("[DEBUG] X - motors stopped");
     }
   }
-
-  bucketProfileIndex = read10BandChannelRaw(DRIVE_OVERRIDE_CRSF_CH);
 
   int rawArmBusSw = crsf.getChannel(ARM_BUS_SWITCH_CRSF_CH);
 
@@ -417,33 +369,18 @@ void loop() {
   float left = 0.0f;
   float right = 0.0f;
 
-  int driveOverrideMode = readDriveOverrideModeFromCH5();
+  // Standard Tank Mixing
+  float throttle = channelNorm(THROTTLE_CRSF_CH);
+  if (THROTTLE_INVERTED) throttle = -throttle;
 
-  if (driveOverrideMode == 0) {
-    float throttle = channelNorm(THROTTLE_CRSF_CH);
-    if (THROTTLE_INVERTED) throttle = -throttle;
+  float steering = channelNorm(STEERING_CRSF_CH);
+  if (STEERING_INVERTED) steering = -steering;
 
-    float steering = channelNorm(STEERING_CRSF_CH);
-    if (STEERING_INVERTED) steering = -steering;
+  left  = throttle + steering;
+  right = throttle - steering;
 
-    left  = throttle + steering;
-    right = throttle - steering;
-
-    left  = constrain(left,  -1.0f, 1.0f);
-    right = constrain(right, -1.0f, 1.0f);
-  } else if (driveOverrideMode == 1) {
-    left = CH5_OVERRIDE_SPEED;
-    right = CH5_OVERRIDE_SPEED;
-  } else if (driveOverrideMode == 2) {
-    left = -CH5_OVERRIDE_SPEED;
-    right = -CH5_OVERRIDE_SPEED;
-  } else if (driveOverrideMode == 3) {
-    left = -CH5_OVERRIDE_SPEED;
-    right = CH5_OVERRIDE_SPEED;
-  } else if (driveOverrideMode == 4) {
-    left = CH5_OVERRIDE_SPEED;
-    right = -CH5_OVERRIDE_SPEED;
-  }
+  left  = constrain(left,  -1.0f, 1.0f);
+  right = constrain(right, -1.0f, 1.0f);
 
   driveMotor(LF_PIN, LB_PIN, left);
   driveMotor(RF_PIN, RB_PIN, right);
